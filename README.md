@@ -4,228 +4,234 @@
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Telegram Bot API](https://img.shields.io/badge/Telegram%20Bot%20API-v5-0088cc?style=flat&logo=telegram)](https://core.telegram.org/bots/api)
 
-Гибкий шаблон Telegram-бота на Go для управления заявками, обработки платежей и командной работы через систему канбан-доски.
+A production-ready Telegram bot template in Go for order intake, payment moderation, and team
+workflow through a kanban board built on forum topics.
 
-**Ключевые возможности**
-- Многошаговая форма с валидацией дедлайнов, объёмов и загрузкой файлов
-- Гейт подписки на канал с опциональным обходом для админов
-- Канбан-доска на основе форумных тем: заявки автоматически распределяются по колонкам "В обработке", "Оплаченные", "Завершённые"
-- Модерация чеков с ролевым доступом: приём платежа, ввод суммы, перемещение карточек и уведомления пользователям
-- Уведомления для команды: еженедельные отчёты, напоминания о дедлайнах, быстрый поиск и экспорт заявок
+**Highlights**
+- A multi-step intake form with deadline parsing, volume validation, and file uploads
+- A channel-subscription gate, with an optional bypass for admins
+- A kanban board on forum topics: orders move automatically through "In progress", "Paid",
+  "Done" columns
+- Receipt moderation with role-based access: accepting payment, entering the amount, moving
+  cards, and notifying the user
+- Team notifications: weekly reports, deadline reminders, fast search, and CSV/PDF export
 
-## Технологический стек
+## Stack
 - Go 1.25.x
 - [go-telegram-bot-api v5](https://github.com/go-telegram-bot-api/telegram-bot-api)
-- PostgreSQL (через [`lib/pq`](https://github.com/lib/pq))
-- [`gofpdf`](https://github.com/jung-kurt/gofpdf) для экспорта в PDF
+- PostgreSQL via [`lib/pq`](https://github.com/lib/pq)
+- [`gofpdf`](https://github.com/jung-kurt/gofpdf) for PDF export
 
-## Структура проекта
+## Project layout
 ```
 tgbot/
-├── cmd/bot/main.go            # Точка входа, режимы getUpdates/webhook, запуск планировщика
+├── cmd/bot/main.go            # entry point, getUpdates/webhook modes, starts the scheduler
 ├── internal/
-│   ├── config/                # Загрузка переменных окружения
-│   ├── constants/             # Перечисления статусов заявок
-│   ├── handlers/              # Весь Telegram-роутинг и бизнес-логика
-│   │   ├── router.go          # FSM форма, подписка, обработка обновлений
+│   ├── config/                # environment variable loading
+│   ├── constants/             # order status enums
+│   ├── handlers/              # all Telegram routing and business logic
+│   │   ├── router.go          # form FSM, subscription gate, update dispatch
 │   │   ├── commands.go        # /start, /profile, /help, /analytics, /find, /export, /clear_db
-│   │   ├── callbacks.go       # inline-кнопки, пагинация, инлайн-режим для админов
-│   │   ├── board.go           # Работа с форумными темами (Канбан)
-│   │   ├── receipt.go         # Загрузка и валидация файлов
-│   │   ├── payment.go         # Подтверждение оплат и переход статусов
-│   │   ├── analytics.go       # Отчёты, экспорт CSV/PDF
-│   │   ├── notifications.go   # Еженедельные отчёты и напоминания о дедлайнах
-│   │   └── admin.go           # Вспомогательные админ-команды
-│   ├── logger/                # Единый формат логирования запросов и ошибок
-│   ├── parsing/               # Парсинг дат и относительных дедлайнов
-│   ├── scheduler/             # Планировщик периодических задач
-│   ├── state/                 # FSM-сессии и отслеживание /start
-│   ├── storage/               # Работа с PostgreSQL, миграции, поиск, аналитика
-│   └── validation/            # Ограничения на файлы чеков
-├── env.example                # Шаблон конфигурации
-├── Makefile                   # Утилиты сборки, запуска, Docker
-├── Dockerfile                 # Сборка образа и запуск бота
-├── data/                      # Каталог для БД в контейнере (создаётся автоматически)
+│   │   ├── callbacks.go       # inline buttons, pagination, admin inline mode
+│   │   ├── board.go           # forum-topic kanban board
+│   │   ├── receipt.go         # file upload and validation
+│   │   ├── payment.go         # payment confirmation, status transitions
+│   │   ├── analytics.go       # reports, CSV/PDF export
+│   │   ├── notifications.go   # weekly reports, deadline reminders
+│   │   └── admin.go           # admin-only helper commands
+│   ├── logger/                # shared request/error log format
+│   ├── parsing/               # date and relative-deadline parsing
+│   ├── scheduler/             # periodic job scheduler
+│   ├── state/                 # FSM sessions, /start tracking
+│   ├── storage/               # PostgreSQL access, migrations, search, analytics
+│   └── validation/             # receipt file constraints
+├── env.example                # config template
+├── Makefile                   # build, run, Docker helpers
+├── Dockerfile
+├── data/                       # container DB directory (created automatically)
 └── README.md
 ```
 
-## Быстрый старт
+## Quick start
 
 ```bash
-# 1. Клонируйте репозиторий
-git clone <your-repo-url>
-cd tgbot
+git clone https://github.com/whiterage/go-telegram-bot-template.git
+cd go-telegram-bot-template
 
-# 2. Создайте .env файл
 cp env.example .env
+# fill in BOT_TOKEN, CHANNEL_ID, ADMIN_IDS, etc.
 
-# 3. Заполните обязательные переменные в .env
-# (BOT_TOKEN, CHANNEL_ID, ADMIN_IDS и т.д.)
-
-# 4. Запустите через Docker
 make docker-build
 make docker-run
 
-# Или локально
+# or locally
 make run
 ```
 
-## Подготовка окружения
-1. Убедитесь, что установлены Go ≥ 1.25 и `make`.
-2. Создайте `.env` на основе примера:
-   ```bash
-   cp env.example .env
-   ```
-3. Заполните обязательные переменные (см. таблицу ниже). Без них бот не запустится.
+## Environment setup
+1. Install Go ≥ 1.25 and `make`.
+2. Create `.env` from the example: `cp env.example .env`.
+3. Fill in the required variables below — the bot won't start without them.
 
-### Переменные окружения
-| Переменная | Обязательная | Описание |
-|------------|-------------|----------|
-| `BOT_TOKEN` | да | Токен, полученный у @BotFather |
-| `APP_ENV` | нет | `dev` включает debug-логирование Telegram API |
-| `CHANNEL_ID` | да | ID канала (формат `-100…`) для проверки подписки |
-| `CHANNEL_URL` | да | Ссылка на канал для кнопки подписки |
-| `ADMIN_IDS` | да | Список Telegram ID админов через запятую |
-| `ALLOW_ADMINS_BYPASS` | нет | `true` по умолчанию: админы канала проходят гейт без подписки |
-| `BOARD_CHAT_ID` | да | ID супергруппы с форумными темами (Канбан) |
-| `INPROGRESS_TOPIC_ID` | да | ID темы "В обработке" |
-| `PAID_TOPIC_ID` | да | ID темы "Оплаченные" |
-| `DONE_TOPIC_ID` | да | ID темы "Завершённые" |
-| `DEADLINE_TOPIC_ID` | да | ID темы для дайджестов по дедлайнам |
-| `USE_WEBHOOK` | нет | `true` — режим вебхука вместо getUpdates |
-| `WEBHOOK_URL` | при `USE_WEBHOOK=true` | Публичный URL до вашего http-сервера |
-| `WEBHOOK_ADDR` | нет | Локальный адрес HTTP-сервера (по умолчанию `:8080`) |
-| `WEBHOOK_PATH` | нет | Путь вебхука (по умолчанию `/telegram/webhook`) |
-| `WEBHOOK_SECRET` | нет | Будущий секрет вебхука (поддержка в API v5.5 отсутствует, хранится «на будущее») |
-| `DB_HOST` | да | Хост PostgreSQL |
-| `DB_PORT` | да | Порт PostgreSQL |
-| `DB_USER` | да | Пользователь PostgreSQL |
-| `DB_PASSWORD` | да | Пароль PostgreSQL |
-| `DB_NAME` | да | Имя базы данных |
-| `DB_SSLMODE` | да | Режим SSL (disable/require/verify-full) |
+### Environment variables
+| Variable | Required | Description |
+|---|---|---|
+| `BOT_TOKEN` | yes | Token from @BotFather |
+| `APP_ENV` | no | `dev` enables debug logging for the Telegram API |
+| `CHANNEL_ID` | yes | Channel ID (`-100…` format) for the subscription check |
+| `CHANNEL_URL` | yes | Channel link for the subscribe button |
+| `ADMIN_IDS` | yes | Comma-separated admin Telegram IDs |
+| `ALLOW_ADMINS_BYPASS` | no | `true` by default: channel admins skip the subscription gate |
+| `BOARD_CHAT_ID` | yes | Supergroup ID with the forum-topic kanban board |
+| `INPROGRESS_TOPIC_ID` | yes | "In progress" topic ID |
+| `PAID_TOPIC_ID` | yes | "Paid" topic ID |
+| `DONE_TOPIC_ID` | yes | "Done" topic ID |
+| `DEADLINE_TOPIC_ID` | yes | Topic ID for deadline digests |
+| `USE_WEBHOOK` | no | `true` for webhook mode instead of getUpdates |
+| `WEBHOOK_URL` | if `USE_WEBHOOK=true` | Public URL to your HTTP server |
+| `WEBHOOK_ADDR` | no | Local HTTP server address (default `:8080`) |
+| `WEBHOOK_PATH` | no | Webhook path (default `/telegram/webhook`) |
+| `WEBHOOK_SECRET` | no | Reserved for a future webhook secret (not yet supported by API v5.5) |
+| `DB_HOST` | yes | PostgreSQL host |
+| `DB_PORT` | yes | PostgreSQL port |
+| `DB_USER` | yes | PostgreSQL user |
+| `DB_PASSWORD` | yes | PostgreSQL password |
+| `DB_NAME` | yes | Database name |
+| `DB_SSLMODE` | yes | SSL mode (disable/require/verify-full) |
 
-## Запуск
-### Локально (getUpdates)
+## Running it
+### Locally (getUpdates)
 ```bash
 make run          # go mod tidy + go run ./cmd/bot
-# или вручную
+# or manually
 GOFLAGS=-mod=mod go run ./cmd/bot
 ```
 
-При остановке (`Ctrl+C`) бот корректно завершает получение обновлений и останавливает планировщик.
+On `Ctrl+C` the bot stops fetching updates and shuts the scheduler down cleanly.
 
 ### Docker
 ```bash
-make docker-build             # собирает образ tgbot:latest
-make docker-run               # запуск в режиме getUpdates
-make docker-run-webhook       # если требуется принимать вебхуки, пробрасывает порт 8080
+make docker-build             # builds the tgbot:latest image
+make docker-run               # getUpdates mode
+make docker-run-webhook       # webhook mode, exposes port 8080
 ```
-Контейнер ожидает файл `.env` и примонтированный каталог `./data` для постоянной базы данных.
+The container expects a `.env` file and a mounted `./data` directory for the persistent database.
 
-## Утилиты Makefile
-| Цель | Назначение |
-|------|------------|
-| `make run` | Установка зависимостей и запуск бота (dev) |
-| `make build` | Сборка бинарника `bin/bot` |
-| `make clean` | Удаление `bin/` и временных файлов |
-| `make clean-db` | Удаление локальной базы данных (только для dev) |
+## Makefile targets
+| Target | Does |
+|---|---|
+| `make run` | Install deps and run the bot (dev) |
+| `make build` | Build the `bin/bot` binary |
+| `make clean` | Remove `bin/` and temp files |
+| `make clean-db` | Delete the local database (dev only) |
 | `make lint` | `go vet` + `gofmt -s -w .` |
-| `make docker-build` | Сборка Docker-образа |
-| `make docker-run` | Бот в контейнере, без вебхука |
-| `make docker-run-webhook` | Контейнер с проброшенным портом 8080 |
-| `make deploy` | (Сервер) `git pull` + `docker compose pull/build/up` через `scripts/deploy.sh` |
+| `make docker-build` | Build the Docker image |
+| `make docker-run` | Run in a container, no webhook |
+| `make docker-run-webhook` | Run in a container with port 8080 exposed |
+| `make deploy` | (Server) `git pull` + `docker compose pull/build/up` via `scripts/deploy.sh` |
 
-### Автоматический деплой (`make deploy`)
-1. Клонируйте репозиторий на сервер (например, `/opt/tgbot/app`), создайте `.env` и каталог `data/`.
-2. Убедитесь, что Docker и плагин `docker compose` установлены.
-3. Один раз сделайте скрипт исполняемым: `chmod +x scripts/deploy.sh`.
-4. Запускайте обновление одной командой:
+### Automated deploy (`make deploy`)
+1. Clone the repo onto the server (e.g. `/opt/tgbot/app`), create `.env` and a `data/` directory.
+2. Make sure Docker and the `docker compose` plugin are installed.
+3. Make the script executable once: `chmod +x scripts/deploy.sh`.
+4. Deploy with one command:
    ```bash
    cd /opt/tgbot/app
    APP_DIR=/opt/tgbot/app make deploy
    ```
 
-Скрипт выполнит `git fetch && git pull --rebase --autostash`, затем `docker compose pull`, `docker compose build` и `docker compose up -d --force-recreate --remove-orphans`, не затрагивая `.env` и данные в `data/`.
+The script runs `git fetch && git pull --rebase --autostash`, then `docker compose pull`,
+`docker compose build`, and `docker compose up -d --force-recreate --remove-orphans` — `.env` and
+the `data/` directory are left untouched.
 
-## Команды и сценарии бота
-**Для пользователей**
-- `/start` — запускает форму: тип учреждения → категория → дедлайн (даты, "1.5 недели", "не знаю") → тип услуги → объём → тема и требования → вложения → подтверждение.
-- `/profile` — список заявок с пагинацией по 5 штук. Кнопки: загрузить чек или посмотреть статус.
-- `/help` — краткая памятка и ссылка на поддержку.
-- Кнопка "💳 Чек" после оплаты запускает загрузку файла; допустимы PDF/JPG/PNG до 20 МБ.
+## Bot commands and flows
+**For users**
+- `/start` — launches the intake form: venue type → category → deadline (dates, "1.5 weeks",
+  "not sure") → service type → volume → theme and requirements → attachments → confirmation.
+- `/profile` — a paginated list of orders, 5 at a time, with buttons to upload a receipt or check
+  status.
+- `/help` — a quick reference and support link.
+- The "💳 Receipt" button after payment starts a file upload; PDF/JPG/PNG up to 20 MB.
 
-**Для администраторов** (ID должны быть в `ADMIN_IDS`)
-- `/analytics [week|month|year|total]` — агрегированная статистика и конверсии за выбранный период.
-- `/export [month|year|total]` — выгрузка текущего среза в `export_*.csv` и `export_*.pdf`.
-- `/find <запрос>` — быстрый поиск по номеру заявки, теме, категории; в ответе кнопки для чата и статуса.
-- `/ratelimit` — статистика защиты от спама (активные пользователи, конфигурация лимитов).
-- Inline-режим: наберите `@вашбот <фраза>` из любого чата и получите список заявок с быстрыми кнопками.
-- `/clear_db` — подчистка базы для тестов (все заявки удаляются, используйте с осторожностью).
-- Инлайн-кнопки в доске:
-  - "✅ Принять №…" — запрос суммы платежа, перевод в "Оплаченные", уведомление клиенту.
-  - "❌ Отклонить №…" — возвращает карточку в "В обработке".
-  - "✅ Завершить №…" / "❌ Отклонить №…" в колонке "Оплаченные" — финальный статус и перемещение в "Завершённые".
+**For admins** (ID must be in `ADMIN_IDS`)
+- `/analytics [week|month|year|total]` — aggregated stats and conversion for the period.
+- `/export [month|year|total]` — exports the current slice to `export_*.csv` and `export_*.pdf`.
+- `/find <query>` — fast search by order number, theme, or category, with reply/status buttons.
+- `/ratelimit` — rate-limiting stats (active users, current configuration).
+- Inline mode: type `@yourbot <phrase>` in any chat to get a list of matching orders with quick
+  action buttons.
+- `/clear_db` — wipes the database for testing (deletes every order — use carefully).
+- Board inline buttons:
+  - "✅ Accept #…" — asks for the payment amount, moves the card to "Paid", notifies the client.
+  - "❌ Reject #…" — sends the card back to "In progress".
+  - "✅ Complete #…" / "❌ Reject #…" in the "Paid" column — final status, moves to "Done".
 
-## Автоматизация
-- **Напоминания о дедлайнах.** Каждые 6 часов бот собирает заявки, у которых дедлайн сегодня, завтра или через 3 дня, и отправляет дайджест в тему `DEADLINE_TOPIC_ID` (при недоступности — дублирует в личку админам).
-- **Еженедельные отчёты.** По понедельникам в 09:00 бот отправляет админам отчёт за прошедшую неделю: входящие, оплаты, конверсию, выручку и возвраты.
+## Automation
+- **Deadline reminders.** Every 6 hours the bot collects orders due today, tomorrow, or in 3
+  days, and posts a digest to the `DEADLINE_TOPIC_ID` topic (falling back to admin DMs if that
+  topic is unreachable).
+- **Weekly reports.** Every Monday at 09:00, admins get a report on the past week: intake,
+  payments, conversion, revenue, and refunds.
 
-## Работа с данными
-- Хранение — таблица `orders` в PostgreSQL. Миграции управляются через версионирование схемы; индексы для частых запросов автоматически создаются при первом запуске.
-- Поля заявки: пользователь, чат, дедлайн, объём, заметки, статус, сведения об оплате и позиция карточки на доске.
-- Все изменения статусов вызывают обновление HTML-карточки в соответствующей теме и логируются.
-- `storage.SaveReceipt` хранит `file_id` чеков, поэтому Telegram повторно отдаёт файлы без дополнительного диска.
+## Data
+- Orders live in a single PostgreSQL `orders` table. Schema migrations are versioned; indexes for
+  frequent queries are created automatically on first run.
+- Order fields: user, chat, deadline, volume, notes, status, payment details, and the card's
+  position on the board.
+- Every status change updates the card's HTML in its board topic and is logged.
+- `storage.SaveReceipt` stores the Telegram `file_id` for receipts, so files are served back by
+  Telegram without extra disk usage.
 
-## Логирование и устойчивость
-- Единый логгер (`internal/logger`) маркирует ошибки отправки, запросов к API, операций с заказами и доской.
-- Проверка подписки использует `getChatMember`; для админов канала действует режим bypass.
-- Защита от повторной модерации: все callback-и проверяют текущий статус и отвечают "Уже обработано" при попытке повторного нажатия.
-- Ограничение типов файлов чеков + проверка размера (20 МБ) предотвращают случайные вложения.
+## Logging and resilience
+- A shared logger (`internal/logger`) tags send errors, API-request errors, and order/board
+  operations.
+- The subscription check uses `getChatMember`; channel admins get the bypass.
+- Double-moderation guard: every callback checks the current status first and replies "Already
+  processed" on a repeated press.
+- Receipt file-type and size limits (20 MB) block accidental attachments.
 
-## Защита от спама (Rate Limiting)
-Бот использует систему ограничения частоты запросов на основе токен-бакет алгоритма для защиты от злоупотреблений и спама.
+## Rate limiting
+A token-bucket rate limiter protects the bot from abuse and spam.
 
-### Типы ограничений
-- **Сообщения** — 100 запросов за 15 минут
-- **Загрузка файлов** — 20 файлов за 20 минут
-- **Нажатия кнопок** — 200 нажатий за 15 минут
-- **Команды** — 20 команд за 10 минут
+| Action | Limit |
+| --- | --- |
+| Messages | 100 per 15 minutes |
+| File uploads | 20 per 20 minutes |
+| Button presses | 200 per 15 minutes |
+| Commands | 20 per 10 minutes |
 
-### Особенности
-- Автоматическое восстановление токенов со временем
-- Администраторы не ограничены — могут использовать бота без ограничений
-- Умные сообщения об ошибках в зависимости от типа действия
-- Автоматическая очистка неактивных пользователей из памяти
-- Интеграция на уровне роутера — проверка происходит автоматически для всех обновлений
+- Tokens replenish automatically over time.
+- Admins are exempt from all limits.
+- Error messages are tailored to the action that got throttled.
+- Inactive users are cleared from memory automatically.
+- Enforced at the router level, so every update is checked without per-handler wiring.
 
-### Мониторинг
-Администраторы могут просмотреть статистику rate limiting командой `/ratelimit`, которая показывает:
-- Количество активных пользователей по типам действий
-- Текущую конфигурацию лимитов
-- Общий статус системы защиты
+Admins can inspect current state with `/ratelimit`: active users per action type, the configured
+limits, and overall system status. More detail in
+[`internal/ratelimit/README.md`](internal/ratelimit/README.md).
 
-Подробнее о настройке и использовании rate limiting см. [`internal/ratelimit/README.md`](internal/ratelimit/README.md).
+## Testing and demo setup
+- `/clear_db` (admin-only) clears all orders.
+- To reset the project entirely, delete the database (or the `./data` directory under Docker) —
+  the bot recreates the schema from scratch on next start.
+- For testing the subscription flow, create a test channel/group and point `.env` at its IDs.
 
-## Подготовка окружения для тестов и демо
-- Очистить записи можно командой `/clear_db` (только админы).
-- При необходимости «сбросить» проект — удалите базу данных (или каталог `./data` в Docker), бот пересоздаст базу с нуля.
-- Для проверки сценариев подписки создайте тестовый канал/группу и укажите их ID в `.env`.
+Once `.env` is filled in and the bot is running, it's ready to take orders and keep the team's
+kanban board in sync.
 
-Готово! После заполнения `.env` и запуска бот сразу готов принимать заявки и синхронно обновлять канбан-доску команды.
+## License
 
-## Лицензия
+MIT — see [LICENSE](LICENSE).
 
-Этот проект распространяется под лицензией MIT. См. файл [LICENSE](LICENSE) для подробностей.
+## Contributing
 
-## Вклад в проект
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add some amazing feature'`)
+4. Push the branch (`git push origin feature/amazing-feature`)
+5. Open a pull request
 
-Вклад приветствуется! Если вы хотите внести свой вклад:
-1. Форкните репозиторий
-2. Создайте ветку для вашей функции (`git checkout -b feature/amazing-feature`)
-3. Закоммитьте изменения (`git commit -m 'Add some amazing feature'`)
-4. Запушьте в ветку (`git push origin feature/amazing-feature`)
-5. Откройте Pull Request
+## Support
 
-## Поддержка
-
-Если у вас есть вопросы или проблемы, создайте [Issue](https://github.com/your-username/tgbot/issues) в репозитории.
+Questions or issues — open one on the
+[repository's issue tracker](https://github.com/whiterage/go-telegram-bot-template/issues).
