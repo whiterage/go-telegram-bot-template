@@ -44,9 +44,24 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 
+	// Была ли база пустой ДО создания схемы: initSchema создаёт orders сразу
+	// по актуальной схеме, поэтому прогонять по ней исторические миграции нельзя
+	// (миграция 4 обращается к колонке notes, которой в новой схеме нет).
+	fresh, err := isFreshDB(db)
+	if err != nil {
+		return nil, err
+	}
+
 	// Инициализация схемы
 	if err := initSchema(db); err != nil {
 		return nil, err
+	}
+
+	if fresh {
+		// Новая база уже соответствует CurrentSchemaVersion — просто ставим отметку.
+		if _, err := db.Exec(fmt.Sprintf("PRAGMA user_version = %d", CurrentSchemaVersion)); err != nil {
+			return nil, err
+		}
 	}
 
 	// Выполнение миграций
@@ -55,6 +70,21 @@ func Open(path string) (*Store, error) {
 	}
 
 	return &Store{DB: db}, nil
+}
+
+// isFreshDB сообщает, что таблицы orders ещё нет — то есть база создаётся с нуля.
+func isFreshDB(db *sql.DB) (bool, error) {
+	var name string
+	err := db.QueryRow(
+		`SELECT name FROM sqlite_master WHERE type='table' AND name='orders'`,
+	).Scan(&name)
+	if err == sql.ErrNoRows {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return false, nil
 }
 
 func initSchema(db *sql.DB) error {
@@ -254,14 +284,27 @@ func runMigrations(db *sql.DB) error {
 		return nil
 	}
 
+	// Всё в одной транзакции: DDL в SQLite транзакционен, поэтому упавшая
+	// миграция откатится целиком и не оставит базу в промежуточном состоянии.
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck // после успешного Commit это no-op
+
+	// Хвост от миграции 4, упавшей до введения транзакций.
+	if _, err = tx.Exec(`DROP TABLE IF EXISTS orders_new`); err != nil {
+		return err
+	}
+
 	// Миграция с версии 0 до 1: добавление колонок для доски
 	if currentVersion < 1 {
-		if _, err = db.Exec(`ALTER TABLE orders ADD COLUMN current_board_msg_id INTEGER DEFAULT 0;`); err != nil {
+		if _, err = tx.Exec(`ALTER TABLE orders ADD COLUMN current_board_msg_id INTEGER DEFAULT 0;`); err != nil {
 			if !isDupColumnErr(err) {
 				return err
 			}
 		}
-		if _, err = db.Exec(`ALTER TABLE orders ADD COLUMN current_board_thread INTEGER DEFAULT 0;`); err != nil {
+		if _, err = tx.Exec(`ALTER TABLE orders ADD COLUMN current_board_thread INTEGER DEFAULT 0;`); err != nil {
 			if !isDupColumnErr(err) {
 				return err
 			}
@@ -270,7 +313,7 @@ func runMigrations(db *sql.DB) error {
 
 	// Миграция с версии 1 до 2: добавление индексов
 	if currentVersion < 2 {
-		_, err = db.Exec(`CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);`)
+		_, err = tx.Exec(`CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);`)
 		if err != nil {
 			return err
 		}
@@ -278,26 +321,32 @@ func runMigrations(db *sql.DB) error {
 
 	// Миграция с версии 2 до 3: добавление полей для платежей
 	if currentVersion < 3 {
-		if _, err = db.Exec(`ALTER TABLE orders ADD COLUMN payment_amount REAL DEFAULT 0;`); err != nil {
+		if _, err = tx.Exec(`ALTER TABLE orders ADD COLUMN payment_amount REAL DEFAULT 0;`); err != nil {
 			if !isDupColumnErr(err) {
 				return err
 			}
 		}
-		if _, err = db.Exec(`ALTER TABLE orders ADD COLUMN payment_date INTEGER DEFAULT 0;`); err != nil {
+		if _, err = tx.Exec(`ALTER TABLE orders ADD COLUMN payment_date INTEGER DEFAULT 0;`); err != nil {
 			if !isDupColumnErr(err) {
 				return err
 			}
 		}
-		_, err = db.Exec(`CREATE INDEX IF NOT EXISTS idx_orders_payment_date ON orders(payment_date);`)
+		_, err = tx.Exec(`CREATE INDEX IF NOT EXISTS idx_orders_payment_date ON orders(payment_date);`)
 		if err != nil {
 			return err
 		}
 	}
 
 	// Миграция с версии 3 до 4: удаление поля faculty
-	if currentVersion < 4 {
+	// Пропускаем, если колонки notes нет: значит таблица уже создана по новой
+	// схеме (свежая база или база, пострадавшая от старого бага с orders_new).
+	hasNotes, err := txHasColumn(tx, "orders", "notes")
+	if err != nil {
+		return err
+	}
+	if currentVersion < 4 && hasNotes {
 		// SQLite не поддерживает DROP COLUMN напрямую, поэтому создаем новую таблицу
-		_, err = db.Exec(`
+		_, err = tx.Exec(`
 			CREATE TABLE orders_new (
 			  id INTEGER PRIMARY KEY AUTOINCREMENT,
 			  user_id INTEGER NOT NULL,
@@ -320,7 +369,7 @@ func runMigrations(db *sql.DB) error {
 		}
 
 		// Копируем данные без faculty
-		_, err = db.Exec(`
+		_, err = tx.Exec(`
 			INSERT INTO orders_new 
 			(id, user_id, chat_id, created_at, service, deadline_raw, pages, notes, status, 
 			 last_receipt_id, last_receipt_type, payment_amount, payment_date, 
@@ -334,26 +383,26 @@ func runMigrations(db *sql.DB) error {
 		}
 
 		// Удаляем старую таблицу и переименовываем новую
-		_, err = db.Exec(`DROP TABLE orders`)
+		_, err = tx.Exec(`DROP TABLE orders`)
 		if err != nil {
 			return err
 		}
 
-		_, err = db.Exec(`ALTER TABLE orders_new RENAME TO orders`)
+		_, err = tx.Exec(`ALTER TABLE orders_new RENAME TO orders`)
 		if err != nil {
 			return err
 		}
 
 		// Восстанавливаем индексы
-		_, err = db.Exec(`CREATE INDEX IF NOT EXISTS idx_orders_user ON orders(user_id)`)
+		_, err = tx.Exec(`CREATE INDEX IF NOT EXISTS idx_orders_user ON orders(user_id)`)
 		if err != nil {
 			return err
 		}
-		_, err = db.Exec(`CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status)`)
+		_, err = tx.Exec(`CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status)`)
 		if err != nil {
 			return err
 		}
-		_, err = db.Exec(`CREATE INDEX IF NOT EXISTS idx_orders_payment_date ON orders(payment_date)`)
+		_, err = tx.Exec(`CREATE INDEX IF NOT EXISTS idx_orders_payment_date ON orders(payment_date)`)
 		if err != nil {
 			return err
 		}
@@ -362,30 +411,53 @@ func runMigrations(db *sql.DB) error {
 	// Миграция с версии 4 до 5: разделение notes на topic и requirements
 	if currentVersion < 5 {
 		// Добавляем новые колонки
-		_, err = db.Exec(`ALTER TABLE orders ADD COLUMN topic TEXT`)
+		_, err = tx.Exec(`ALTER TABLE orders ADD COLUMN topic TEXT`)
 		if err != nil && !isDupColumnErr(err) {
 			return err
 		}
-		_, err = db.Exec(`ALTER TABLE orders ADD COLUMN requirements TEXT`)
+		_, err = tx.Exec(`ALTER TABLE orders ADD COLUMN requirements TEXT`)
 		if err != nil && !isDupColumnErr(err) {
 			return err
 		}
 
 		// Заполняем новые поля значениями по умолчанию для существующих записей
-		_, err = db.Exec(`UPDATE orders SET topic = 'Не указано', requirements = 'Не указано' WHERE topic IS NULL OR requirements IS NULL`)
+		_, err = tx.Exec(`UPDATE orders SET topic = 'Не указано', requirements = 'Не указано' WHERE topic IS NULL OR requirements IS NULL`)
 		if err != nil {
 			return err
 		}
 	}
 
 	if currentVersion < 6 {
-		if _, err = db.Exec(`ALTER TABLE orders ADD COLUMN client_source TEXT`); err != nil && !isDupColumnErr(err) {
+		if _, err = tx.Exec(`ALTER TABLE orders ADD COLUMN client_source TEXT`); err != nil && !isDupColumnErr(err) {
 			return err
 		}
 	}
 
-	_, err = db.Exec(fmt.Sprintf("PRAGMA user_version = %d", CurrentSchemaVersion))
-	return err
+	if _, err = tx.Exec(fmt.Sprintf("PRAGMA user_version = %d", CurrentSchemaVersion)); err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}
+
+// txHasColumn проверяет наличие колонки в таблице.
+func txHasColumn(tx *sql.Tx, table, column string) (bool, error) {
+	rows, err := tx.Query(`SELECT name FROM pragma_table_info(?)`, table)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 // Вспомогательная: ошибка "duplicate column name"

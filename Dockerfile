@@ -1,18 +1,23 @@
+# ---- build stage ----
 FROM golang:1.25-alpine AS builder
-EXPOSE 8080
 WORKDIR /app
+
 COPY go.mod go.sum ./
 RUN go mod download
-COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -o bot ./cmd/bot
 
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o bot ./cmd/bot
+
+# ---- runtime stage ----
 FROM alpine:latest
-RUN apk --no-cache add ca-certificates
-WORKDIR /root/tgbot_unihack
+RUN apk --no-cache add ca-certificates tzdata
+
+WORKDIR /app
 COPY --from=builder /app/bot .
-# Копируем .env файл в образ
-COPY .env .
-# Создаем директорию для данных
-RUN mkdir -p /root/tgbot_unihack
-VOLUME ["/root/tgbot_unihack"]
+
+# Каталог для SQLite-базы (монтируется как volume)
+RUN mkdir -p /app/data
+ENV DB_PATH=/app/data/data.db
+
+EXPOSE 8080
 CMD ["./bot"]

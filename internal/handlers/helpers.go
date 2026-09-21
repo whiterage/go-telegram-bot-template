@@ -14,6 +14,12 @@ import (
 /* ===================== Подписка и утилиты ===================== */
 
 func (r *Router) isSubscribed(userID int64) bool {
+	// Гейт подписки выключен (REQUIRE_SUBSCRIPTION=false) или канал не задан —
+	// пропускаем всех без обращения к Telegram API.
+	if !r.requireSub || r.channelID == 0 {
+		return true
+	}
+
 	cfg := tgbotapi.GetChatMemberConfig{
 		ChatConfigWithUser: tgbotapi.ChatConfigWithUser{
 			ChatID: r.channelID,

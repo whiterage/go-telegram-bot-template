@@ -32,7 +32,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("ошибка загрузки конфига: %v", err)
 	}
-	log.Printf("Env: %s | UseWebhook=%v", cfg.Env, cfg.UseWebhook)
+	log.Printf("Env: %s | UseWebhook=%v | DB=%s | RequireSubscription=%v", cfg.Env, cfg.UseWebhook, cfg.DBPath, cfg.RequireSubscription)
 
 	bot, err := tgbotapi.NewBotAPI(cfg.BotToken)
 	if err != nil {
@@ -43,7 +43,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	st, err := storage.Open("data.db")
+	st, err := storage.Open(cfg.DBPath)
 	if err != nil {
 		log.Fatalf("db open error: %v", err)
 	}
@@ -58,7 +58,7 @@ func main() {
 	sessions := state.NewSessions()
 	r := router.NewRouter(
 		bot, started, sessions,
-		cfg.ChannelID, cfg.ChannelURL, cfg.AllowAdminsBypass,
+		cfg.ChannelID, cfg.ChannelURL, cfg.AllowAdminsBypass, cfg.RequireSubscription,
 		cfg.AdminIDsCSV, st,
 		cfg.BoardChatID, cfg.TopicInProgressID, cfg.TopicPaidID, cfg.TopicDoneID, cfg.DeadlineTopicID, cfg.FAQURL,
 	)
@@ -77,7 +77,7 @@ func main() {
 			adminIDs = append(adminIDs, id)
 		}
 	}
-	weeklyReporter := reports.NewWeeklyReporter(bot, st, healthChecker, adminIDs, cfg.ChannelID)
+	weeklyReporter := reports.NewWeeklyReporter(bot, st, healthChecker, adminIDs, cfg.ChannelID, cfg.BoardChatID, cfg.ReportsTopicID)
 
 	// Weekly scheduler
 	weeklyScheduler := scheduler.NewWeeklyScheduler(weeklyReporter)
@@ -104,11 +104,8 @@ func main() {
 		weeklyScheduler.Stop()
 		sched.Stop()
 
-		// Закрываем БД
-		if err := st.DB.Close(); err != nil {
-			log.Printf("Error closing database: %v", err)
-		}
-
+		// БД закрывается в defer выше — здесь не трогаем,
+		// иначе получаем "sql: database is closed" в логах.
 		log.Println("Graceful shutdown completed")
 	}()
 

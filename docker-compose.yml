@@ -1,0 +1,30 @@
+services:
+  bot:
+    build: .
+    image: tgbot:latest
+    container_name: tgbot
+    restart: unless-stopped
+
+    # Конфиг берётся из .env рядом с этим файлом (в образ он НЕ вшит)
+    env_file:
+      - .env
+
+    environment:
+      # SQLite-база внутри volume, иначе данные теряются при пересоздании контейнера
+      DB_PATH: /app/data/data.db
+      # Часовой пояс: от него зависят дедлайны и отчёты "по понедельникам в 9:00"
+      TZ: ${TZ:-Europe/Moscow}
+
+    volumes:
+      - ./data:/app/data
+
+    # Нужно только в режиме USE_WEBHOOK=true.
+    # В режиме getUpdates (по умолчанию) порт не требуется — раскомментируйте при необходимости.
+    # ports:
+    #   - "8080:8080"
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

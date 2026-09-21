@@ -14,9 +14,10 @@ type AppConfig struct {
 	BotToken string
 	Env      string
 
-	ChannelID         int64
-	ChannelURL        string
-	AllowAdminsBypass bool
+	ChannelID           int64
+	ChannelURL          string
+	AllowAdminsBypass   bool
+	RequireSubscription bool
 
 	AdminIDsCSV       string
 	BoardChatID       int64
@@ -24,6 +25,7 @@ type AppConfig struct {
 	TopicPaidID       int
 	TopicDoneID       int
 	DeadlineTopicID   int
+	ReportsTopicID    int
 	DBPath            string
 	UseWebhook        bool
 	WebhookURL        string
@@ -59,19 +61,28 @@ func Load() (AppConfig, error) {
 		return AppConfig{}, errors.New("BOT_TOKEN is empty: set env var BOT_TOKEN")
 	}
 
+	// Обязательная подписка на канал. По умолчанию включена;
+	// REQUIRE_SUBSCRIPTION=false полностью отключает гейт,
+	// и тогда CHANNEL_ID/CHANNEL_URL становятся необязательными.
+	reqSub := strings.TrimSpace(os.Getenv("REQUIRE_SUBSCRIPTION"))
+	cfg.RequireSubscription = !(reqSub == "0" || strings.EqualFold(reqSub, "false") || strings.EqualFold(reqSub, "no"))
+
 	chRaw := strings.TrimSpace(os.Getenv("CHANNEL_ID"))
 	if chRaw == "" {
-		return AppConfig{}, errors.New("CHANNEL_ID is empty: set env var CHANNEL_ID (numeric channel id like -100...)")
+		if cfg.RequireSubscription {
+			return AppConfig{}, errors.New("CHANNEL_ID is empty: set env var CHANNEL_ID (numeric channel id like -100...) or set REQUIRE_SUBSCRIPTION=false")
+		}
+	} else {
+		chID, perr := strconv.ParseInt(chRaw, 10, 64)
+		if perr != nil {
+			return AppConfig{}, errors.New("CHANNEL_ID must be an integer (like -1001234567890)")
+		}
+		cfg.ChannelID = chID
 	}
-	chID, err := strconv.ParseInt(chRaw, 10, 64)
-	if err != nil {
-		return AppConfig{}, errors.New("CHANNEL_ID must be an integer (like -1001234567890)")
-	}
-	cfg.ChannelID = chID
 
 	cfg.ChannelURL = strings.TrimSpace(os.Getenv("CHANNEL_URL"))
-	if cfg.ChannelURL == "" {
-		return AppConfig{}, errors.New("CHANNEL_URL is empty: set env var CHANNEL_URL (t.me/...)")
+	if cfg.ChannelURL == "" && cfg.RequireSubscription {
+		return AppConfig{}, errors.New("CHANNEL_URL is empty: set env var CHANNEL_URL (t.me/...) or set REQUIRE_SUBSCRIPTION=false")
 	}
 	cfg.AdminIDsCSV = strings.TrimSpace(os.Getenv("ADMIN_IDS"))
 	boardRaw := strings.TrimSpace(os.Getenv("BOARD_CHAT_ID"))
@@ -107,6 +118,16 @@ func Load() (AppConfig, error) {
 	if cfg.DeadlineTopicID, err = parseInt("DEADLINE_TOPIC_ID", "DEADLINE_TOPIC_ID"); err != nil {
 		return AppConfig{}, err
 	}
+	// Тема «Отчёты» необязательна: если не задана, еженедельный отчёт
+	// уходит только в личку админам.
+	if v := strings.TrimSpace(os.Getenv("REPORTS_TOPIC_ID")); v != "" {
+		n, perr := strconv.Atoi(v)
+		if perr != nil {
+			return AppConfig{}, errors.New("REPORTS_TOPIC_ID must be int")
+		}
+		cfg.ReportsTopicID = n
+	}
+
 	cfg.DBPath = strings.TrimSpace(os.Getenv("DB_PATH"))
 	if cfg.DBPath == "" {
 		cfg.DBPath = "data.db"
