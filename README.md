@@ -9,7 +9,7 @@ workflow through a kanban board built on forum topics.
 
 **Highlights**
 - A multi-step intake form with deadline parsing, volume validation, and file uploads
-- A channel-subscription gate, with an optional bypass for admins
+- An optional channel-subscription gate (`REQUIRE_SUBSCRIPTION`), with a bypass for admins
 - A kanban board on forum topics: orders move automatically through "In progress", "Paid",
   "Done" columns
 - Receipt moderation with role-based access: accepting payment, entering the amount, moving
@@ -19,7 +19,7 @@ workflow through a kanban board built on forum topics.
 ## Stack
 - Go 1.25.x
 - [go-telegram-bot-api v5](https://github.com/go-telegram-bot-api/telegram-bot-api)
-- PostgreSQL via [`lib/pq`](https://github.com/lib/pq)
+- SQLite via [`modernc.org/sqlite`](https://modernc.org/sqlite) (pure Go, no CGO, no separate DB server)
 - [`gofpdf`](https://github.com/jung-kurt/gofpdf) for PDF export
 
 ## Project layout
@@ -43,11 +43,13 @@ tgbot/
 │   ├── parsing/               # date and relative-deadline parsing
 │   ├── scheduler/             # periodic job scheduler
 │   ├── state/                 # FSM sessions, /start tracking
-│   ├── storage/               # PostgreSQL access, migrations, search, analytics
+│   ├── storage/               # SQLite access, migrations, search, analytics
 │   └── validation/             # receipt file constraints
 ├── env.example                # config template
 ├── Makefile                   # build, run, Docker helpers
 ├── Dockerfile
+├── docker-compose.yml          # server deployment
+├── scripts/deploy.sh           # update/restart on the server
 ├── data/                       # container DB directory (created automatically)
 └── README.md
 ```
@@ -78,8 +80,9 @@ make run
 |---|---|---|
 | `BOT_TOKEN` | yes | Token from @BotFather |
 | `APP_ENV` | no | `dev` enables debug logging for the Telegram API |
-| `CHANNEL_ID` | yes | Channel ID (`-100…` format) for the subscription check |
-| `CHANNEL_URL` | yes | Channel link for the subscribe button |
+| `REQUIRE_SUBSCRIPTION` | no | `true` by default. Set to `false` to drop the subscription gate entirely — `CHANNEL_ID`/`CHANNEL_URL` then become optional |
+| `CHANNEL_ID` | if gate on | Channel ID (`-100…` format) for the subscription check |
+| `CHANNEL_URL` | if gate on | Channel link for the subscribe button |
 | `ADMIN_IDS` | yes | Comma-separated admin Telegram IDs |
 | `ALLOW_ADMINS_BYPASS` | no | `true` by default: channel admins skip the subscription gate |
 | `BOARD_CHAT_ID` | yes | Supergroup ID with the forum-topic kanban board |
@@ -92,12 +95,8 @@ make run
 | `WEBHOOK_ADDR` | no | Local HTTP server address (default `:8080`) |
 | `WEBHOOK_PATH` | no | Webhook path (default `/telegram/webhook`) |
 | `WEBHOOK_SECRET` | no | Reserved for a future webhook secret (not yet supported by API v5.5) |
-| `DB_HOST` | yes | PostgreSQL host |
-| `DB_PORT` | yes | PostgreSQL port |
-| `DB_USER` | yes | PostgreSQL user |
-| `DB_PASSWORD` | yes | PostgreSQL password |
-| `DB_NAME` | yes | Database name |
-| `DB_SSLMODE` | yes | SSL mode (disable/require/verify-full) |
+| `DB_PATH` | no | Path to the SQLite file (default `data.db`; `/app/data/data.db` in Docker) |
+| `TZ` | no | Timezone for deadlines and weekly reports (default `Europe/Moscow` in Compose) |
 
 ## Running it
 ### Locally (getUpdates)
@@ -109,13 +108,23 @@ GOFLAGS=-mod=mod go run ./cmd/bot
 
 On `Ctrl+C` the bot stops fetching updates and shuts the scheduler down cleanly.
 
-### Docker
+### Docker Compose (recommended for a server)
+```bash
+cp env.example .env           # fill in BOT_TOKEN and the IDs
+make up                       # build + start in the background
+make logs                     # follow logs
+make down                     # stop
+```
+
+### Plain Docker
 ```bash
 make docker-build             # builds the tgbot:latest image
 make docker-run               # getUpdates mode
 make docker-run-webhook       # webhook mode, exposes port 8080
 ```
-The container expects a `.env` file and a mounted `./data` directory for the persistent database.
+The container expects a `.env` file next to `docker-compose.yml` and a mounted `./data` directory
+for the persistent SQLite database. The `.env` is **not** baked into the image — it is read at
+runtime, so changing config needs only a restart, not a rebuild.
 
 ## Makefile targets
 | Target | Does |
@@ -128,7 +137,8 @@ The container expects a `.env` file and a mounted `./data` directory for the per
 | `make docker-build` | Build the Docker image |
 | `make docker-run` | Run in a container, no webhook |
 | `make docker-run-webhook` | Run in a container with port 8080 exposed |
-| `make deploy` | (Server) `git pull` + `docker compose pull/build/up` via `scripts/deploy.sh` |
+| `make up` / `make down` / `make logs` | Start / stop / follow logs via docker compose |
+| `make deploy` | (Server) `git pull` + DB backup + `docker compose build/up` via `scripts/deploy.sh` |
 
 ### Automated deploy (`make deploy`)
 1. Clone the repo onto the server (e.g. `/opt/tgbot/app`), create `.env` and a `data/` directory.
@@ -140,9 +150,10 @@ The container expects a `.env` file and a mounted `./data` directory for the per
    APP_DIR=/opt/tgbot/app make deploy
    ```
 
-The script runs `git fetch && git pull --rebase --autostash`, then `docker compose pull`,
-`docker compose build`, and `docker compose up -d --force-recreate --remove-orphans` — `.env` and
-the `data/` directory are left untouched.
+The script runs `git fetch && git pull --rebase --autostash`, backs up `data/data.db` (keeping the
+7 most recent backups), then `docker compose build` and
+`docker compose up -d --force-recreate --remove-orphans` — `.env` and the `data/` directory are
+left untouched.
 
 ## Bot commands and flows
 **For users**
@@ -174,7 +185,7 @@ the `data/` directory are left untouched.
   payments, conversion, revenue, and refunds.
 
 ## Data
-- Orders live in a single PostgreSQL `orders` table. Schema migrations are versioned; indexes for
+- Orders live in a single SQLite `orders` table. Schema migrations are versioned; indexes for
   frequent queries are created automatically on first run.
 - Order fields: user, chat, deadline, volume, notes, status, payment details, and the card's
   position on the board.

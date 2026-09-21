@@ -62,7 +62,8 @@ temp/
 *.cache
 
 # Docker
-.dockerignore
+# .dockerignore намеренно НЕ игнорируется: он нужен в репозитории,
+# иначе в контекст сборки на чистом клоне уедут .git и .idea
 docker-compose.override.yml
 
 # Export files

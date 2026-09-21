@@ -2,10 +2,14 @@ package reports
 
 import (
 	"fmt"
+	"html"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
 	"tgbot/internal/health"
+	"tgbot/internal/logger"
 	"tgbot/internal/storage"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
@@ -18,16 +22,22 @@ type WeeklyReporter struct {
 	health    *health.HealthChecker
 	adminIDs  []int64
 	channelID int64
+
+	// Тема «Отчёты» на доске: отчёт дублируется туда, если оба поля заданы.
+	boardChatID    int64
+	reportsTopicID int
 }
 
 // NewWeeklyReporter создает новый weekly reporter
-func NewWeeklyReporter(bot *tgbotapi.BotAPI, store *storage.Store, health *health.HealthChecker, adminIDs []int64, channelID int64) *WeeklyReporter {
+func NewWeeklyReporter(bot *tgbotapi.BotAPI, store *storage.Store, health *health.HealthChecker, adminIDs []int64, channelID int64, boardChatID int64, reportsTopicID int) *WeeklyReporter {
 	return &WeeklyReporter{
-		bot:       bot,
-		store:     store,
-		health:    health,
-		adminIDs:  adminIDs,
-		channelID: channelID,
+		bot:            bot,
+		store:          store,
+		health:         health,
+		adminIDs:       adminIDs,
+		channelID:      channelID,
+		boardChatID:    boardChatID,
+		reportsTopicID: reportsTopicID,
 	}
 }
 
@@ -136,28 +146,61 @@ func (wr *WeeklyReporter) GenerateWeeklyReport() (string, error) {
 	return report.String(), nil
 }
 
-// SendWeeklyReport отправляет еженедельный отчет
+// boldRe переводит **жирный** из Markdown в HTML: у отчёта расставлены
+// двойные звёздочки, а legacy-Markdown в Telegram понимает только одинарные
+// и падает с "can't parse entities". HTML тут надёжнее — им же размечена доска.
+var boldRe = regexp.MustCompile(`\*\*(.+?)\*\*`)
+
+func toHTML(s string) string {
+	return boldRe.ReplaceAllString(html.EscapeString(s), "<b>$1</b>")
+}
+
+// sendToTopic шлёт сообщение в конкретную тему форума.
+// В telegram-bot-api v5.5.1 у MessageConfig нет поля MessageThreadID,
+// поэтому дёргаем API напрямую — так же, как это делает internal/handlers/board.go.
+func (wr *WeeklyReporter) sendToTopic(chatID int64, threadID int, text string) error {
+	params := tgbotapi.Params{}
+	params["chat_id"] = strconv.FormatInt(chatID, 10)
+	params["message_thread_id"] = strconv.Itoa(threadID)
+	params["text"] = text
+	params["parse_mode"] = "HTML"
+
+	_, err := wr.bot.MakeRequest("sendMessage", params)
+	return err
+}
+
+// SendWeeklyReport отправляет еженедельный отчет в тему «Отчёты».
+// В личку админам отчёт НЕ дублируется — только если тема не настроена
+// или отправка в неё не удалась, иначе отчёт потерялся бы молча.
 func (wr *WeeklyReporter) SendWeeklyReport() error {
 	report, err := wr.GenerateWeeklyReport()
 	if err != nil {
 		return fmt.Errorf("failed to generate weekly report: %w", err)
 	}
 
-	// Отправляем админам
+	if wr.boardChatID != 0 && wr.reportsTopicID != 0 {
+		if err := wr.sendToTopic(wr.boardChatID, wr.reportsTopicID, toHTML(report)); err != nil {
+			logger.LogBoardError(err, 0, "weekly_report_topic", wr.reportsTopicID)
+			wr.sendToAdmins(report) // запасной канал, чтобы отчёт не пропал
+			return err
+		}
+		return nil
+	}
+
+	// Тема не настроена — шлём админам, иначе отчёт уйдёт в никуда.
+	wr.sendToAdmins(report)
+	return nil
+}
+
+// sendToAdmins — резервная доставка отчёта в личку админам.
+func (wr *WeeklyReporter) sendToAdmins(report string) {
 	for _, adminID := range wr.adminIDs {
 		msg := tgbotapi.NewMessage(adminID, report)
 		msg.ParseMode = "Markdown"
-		wr.bot.Send(msg)
+		if _, err := wr.bot.Send(msg); err != nil {
+			logger.LogSendError(err, adminID, "weekly_report_admin")
+		}
 	}
-
-	// Отправляем в канал (если указан)
-	if wr.channelID != 0 {
-		msg := tgbotapi.NewMessage(wr.channelID, report)
-		msg.ParseMode = "Markdown"
-		wr.bot.Send(msg)
-	}
-
-	return nil
 }
 
 // StatusStat представляет статистику по статусам

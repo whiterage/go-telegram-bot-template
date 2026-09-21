@@ -22,6 +22,7 @@ type Router struct {
 	started           *state.StartTracker
 	sessions          *state.Sessions
 	channelID         int64
+	requireSub        bool
 	channelURL        string
 	allowAdminsBypass bool
 	adminIDs          map[int64]struct{}
@@ -81,6 +82,7 @@ func NewRouter(
 	channelID int64,
 	channelURL string,
 	allowAdminsBypass bool,
+	requireSub bool,
 	adminIDsCSV string,
 	store *storage.Store,
 	boardChatID int64,
@@ -101,6 +103,7 @@ func NewRouter(
 		started:           started,
 		sessions:          sessions,
 		channelID:         channelID,
+		requireSub:        requireSub,
 		channelURL:        channelURL,
 		allowAdminsBypass: allowAdminsBypass,
 		adminIDs:          admins,

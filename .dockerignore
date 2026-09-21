@@ -1,0 +1,15 @@
+.git
+.gitignore
+.idea
+.vscode
+bin/
+data/
+*.db
+*.sqlite
+*.log
+.env
+.env.*
+*.md
+!README.md
+export_*.csv
+export_*.pdf

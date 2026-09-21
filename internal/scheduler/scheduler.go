@@ -35,8 +35,9 @@ func (s *Scheduler) Start() {
 
 	go s.runDeadlineChecker()
 
-	// Еженедельные отчеты по понедельникам в 9:00
-	go s.runWeeklyReports()
+	// Еженедельные отчёты здесь НЕ запускаем: за них отвечает
+	// WeeklyScheduler (internal/scheduler/weekly.go). Раньше работали оба,
+	// и админам приходило по два отчёта каждый понедельник.
 
 	log.Println("Scheduler started")
 }

@@ -14,7 +14,7 @@ DOCKER_TAG := latest
 # clean     - очистка артефактов сборки (безопасно для продакшена)
 # clean-db  - очистка базы данных (только для разработки!)
 
-.PHONY: run build clean clean-db lint docker-build docker-run
+.PHONY: run build clean clean-db lint docker-build docker-run docker-run-webhook up down logs deploy deploy-server server-logs
 
 run:
 	@echo "→ running..."
@@ -56,3 +56,30 @@ docker-run:
 
 docker-run-webhook:
 	docker run --rm --env-file .env -p 8080:8080 -v $(PWD)/data:/app/data $(DOCKER_IMAGE):$(DOCKER_TAG)
+
+# --- docker compose: основной способ запуска на сервере ---
+up:
+	@mkdir -p $(PWD)/data
+	docker compose up -d --build
+	@echo "OK: запущено. Логи: make logs"
+
+down:
+	docker compose down
+
+logs:
+	docker compose logs -f bot
+
+# Обновление на сервере: git pull + бэкап БД + пересборка + рестарт
+deploy:
+	@chmod +x scripts/deploy.sh
+	@APP_DIR=$${APP_DIR:-$(PWD)} ./scripts/deploy.sh
+
+# --- деплой на VPS без Docker (systemd + статический бинарник) ---
+# Укажите свой сервер: make deploy-server SERVER=root@1.2.3.4
+SERVER ?=
+
+deploy-server:
+	@SERVER=$(SERVER) ./scripts/deploy-systemd.sh
+
+server-logs:
+	ssh $(SERVER) 'journalctl -u tgbot -f -o cat'
